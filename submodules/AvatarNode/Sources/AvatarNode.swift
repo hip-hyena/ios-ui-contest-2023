@@ -89,13 +89,14 @@ private func calculateColors(explicitColorIndex: Int?, peerId: EnginePeer.Id?, i
             colors = AvatarNode.savedMessagesColors
         } else if case .editAvatarIcon = icon, let theme {
             colors = [theme.list.itemAccentColor.withAlphaComponent(0.1), theme.list.itemAccentColor.withAlphaComponent(0.1)]
-        } else if case let .archivedChatsIcon(hiddenByDefault) = icon, let theme = theme {
+        } else if case .archivedChatsIcon = icon, let theme = theme {
             let backgroundColors: (UIColor, UIColor)
-            if hiddenByDefault {
+            /*if hiddenByDefault {
                 backgroundColors = theme.chatList.unpinnedArchiveAvatarColor.backgroundColors.colors
             } else {
                 backgroundColors = theme.chatList.pinnedArchiveAvatarColor.backgroundColors.colors
-            }
+            }*/
+            backgroundColors = theme.chatList.pinnedArchiveAvatarColor.backgroundColors.colors
             colors = [backgroundColors.1, backgroundColors.0]
         } else {
             colors = AvatarNode.grayscaleColors
@@ -564,12 +565,13 @@ public final class AvatarNode: ASDisplayNode {
             
             var iconColor = UIColor.white
             if let parameters = parameters as? AvatarNodeParameters, parameters.icon != .none {
-                if case let .archivedChatsIcon(hiddenByDefault) = parameters.icon, let theme = parameters.theme {
-                    if hiddenByDefault {
+                if case .archivedChatsIcon = parameters.icon {
+                    /*if hiddenByDefault {
                         iconColor = theme.chatList.unpinnedArchiveAvatarColor.foregroundColor
                     } else {
                         iconColor = theme.chatList.pinnedArchiveAvatarColor.foregroundColor
-                    }
+                    }*/
+                    iconColor = .white
                 }
             }
             

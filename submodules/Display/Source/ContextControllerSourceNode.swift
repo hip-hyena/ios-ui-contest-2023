@@ -16,6 +16,11 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
     }
     public var animateScale: Bool = true
     
+    // These are used for contest's animation purposes
+    public var mainNode: ASDisplayNode?
+    public var avatarNode: ASDisplayNode?
+    public var onlineNode: ASDisplayNode?
+    
     public var activated: ((ContextGesture, CGPoint) -> Void)?
     public var shouldBegin: ((CGPoint) -> Bool)?
     public var customActivationProgress: ((CGFloat, ContextGestureTransition) -> Void)?

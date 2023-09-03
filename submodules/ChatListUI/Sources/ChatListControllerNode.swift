@@ -20,6 +20,7 @@ import ComponentFlow
 import ChatFolderLinkPreviewScreen
 import ChatListHeaderComponent
 import StoryPeerListComponent
+import AnimationUI
 
 public enum ChatListContainerNodeFilter: Equatable {
     case all
@@ -157,6 +158,301 @@ private final class ShimmerEffectNode: ASDisplayNode {
         animation.repeatCount = Float.infinity
         animation.beginTime = 1.0
         self.imageNode.layer.add(animation, forKey: "shimmer")
+    }
+}
+
+private final class ChatListPullToArchiveNode: ASDisplayNode {
+    private let swipeTextNode = ImmediateTextNode()
+    private let releaseWrapperNode = ASDisplayNode()
+    private let releaseTextNode = ImmediateTextNode()
+    private let backgroundNode = ASImageNode()
+    private let foregroundNode = ASImageNode()
+    private let avatarNode = ASImageNode()
+    private let maskLayer = CALayer()
+    private let maskSublayer = CALayer()
+    private let trackNode = ASDisplayNode()
+    private let animationNode: AnimationNode
+    private var width: CGFloat = 0.0
+    private var navigationHeight: CGFloat = 0.0
+    private var storiesInset: CGFloat = 0.0
+    private var offset: CGFloat = 0.0
+    private var prevH: CGFloat = 0.0
+    private var isDragging: Bool = true
+    private var hasHiddenItems: Bool = true
+    
+    private var realAvatarNode: ASDisplayNode? = nil
+    
+    let activationThreshold: CGFloat = 82.0
+    let bgColor = UIColor(rgb: 0xa7a7a7)
+    let fgColor = UIColor(rgb: 0x0d7af2)
+    var avColor: UIColor
+    let whiteColor = UIColor(rgb: 0xffffff)
+    
+    var isActive: Bool = false // changes to true when user pulls enough
+    var isTriggered: Bool = false // changes to true when isActive and user releases (stops dragging)
+    
+    var isWaitingForAnimation: Bool = false
+    
+    init(theme: PresentationTheme) {
+        
+        swipeTextNode.textAlignment = .center
+        swipeTextNode.maximumNumberOfLines = 1
+        swipeTextNode.attributedText = NSAttributedString(string: "Swipe down for archive", font: Font.bold(16.0), textColor: whiteColor)
+        
+        releaseTextNode.textAlignment = .center
+        releaseTextNode.maximumNumberOfLines = 1
+        releaseTextNode.attributedText = NSAttributedString(string: "Release for archive", font: Font.bold(16.0), textColor: whiteColor)
+
+        backgroundNode.image = generateGradientImage(size: CGSize(width: 30.0, height: 1.0), colors: [UIColor(rgb: 0xa8afb6), UIColor(rgb: 0xd4d4db)], locations: [0.0, 1.0], direction: .horizontal)
+        backgroundNode.contentMode = .scaleToFill
+        
+        foregroundNode.image = generateGradientImage(size: CGSize(width: 30.0, height: 1.0), colors: [UIColor(rgb: 0x0d7af1), UIColor(rgb: 0x72b1f7)], locations: [0.0, 1.0], direction: .horizontal)
+        foregroundNode.contentMode = .scaleToFill
+        
+        let avatarColors = theme.chatList.pinnedArchiveAvatarColor.backgroundColors.colors
+        avatarNode.image = generateGradientImage(size: CGSize(width: 1.0, height: 10.0), colors: [avatarColors.0, avatarColors.1], locations: [0.0, 1.0], direction: .vertical)
+        avatarNode.contentMode = .scaleToFill
+        avatarNode.layer.opacity = 0.0
+        avColor = avatarColors.0.mixedWith(avatarColors.1, alpha: 0.45)
+        
+        trackNode.backgroundColor = UIColor(white: 1.0, alpha: 0.5)
+        trackNode.layer.cornerRadius = 10.0
+        
+        animationNode = AnimationNode(animation: "anim_pull_archive", colors: [
+            "Arrow 1.Arrow 1.Stroke 1": bgColor,
+            "Arrow 2.Arrow 2.Stroke 1": bgColor,
+            "Box.box1.Fill 1": whiteColor,
+            "Cap.cap1.Fill 1": whiteColor,
+            "Cap.cap2.Fill 1": whiteColor,
+        ], scale: 1.0)
+        animationNode.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5 + 2.0/57.0)
+        animationNode.layer.transform = CATransform3DMakeRotation(CGFloat(Float.pi), 0.0, 0.0, 0.0)
+        
+        maskLayer.addSublayer(maskSublayer)
+        maskSublayer.backgroundColor = UIColor.black.cgColor
+        maskLayer.sublayerTransform = CATransform3DMakeScale(0.0, 0.0, 1.0)
+        
+        super.init()
+        
+        addSubnode(backgroundNode)
+        addSubnode(swipeTextNode)
+        
+        addSubnode(foregroundNode)
+        foregroundNode.addSubnode(avatarNode)
+        foregroundNode.addSubnode(releaseWrapperNode)
+        releaseWrapperNode.addSubnode(releaseTextNode)
+        releaseWrapperNode.clipsToBounds = true
+        foregroundNode.clipsToBounds = true
+        foregroundNode.layer.mask = maskLayer
+        
+        addSubnode(trackNode)
+        addSubnode(animationNode)
+        
+    }
+    
+    func reset() {
+        prevH = 0.0
+        avatarNode.layer.opacity = 0.0
+        avatarNode.layer.transform = CATransform3DMakeScale(1.0, 1.0, 1.0)
+        animationNode.reset()
+        animationNode.animationView()?.currentFrame = 0
+        animationNode.layer.transform = CATransform3DMakeRotation(CGFloat(Float.pi), 0.0, 0.0, 0.0)
+        maskLayer.sublayerTransform = CATransform3DMakeScale(0.0, 0.0, 1.0)
+        animationNode.setColors(colors: [ // TODO: they should be animated
+            "Arrow 1.Arrow 1.Stroke 1": bgColor,
+            "Arrow 2.Arrow 2.Stroke 1": bgColor,
+            "Box.box1.Fill 1": whiteColor,
+            "Cap.cap1.Fill 1": whiteColor,
+            "Cap.cap2.Fill 1": whiteColor,
+        ])
+        swipeTextNode.layer.opacity = 1.0
+        swipeTextNode.layer.transform = CATransform3DIdentity
+        if let avatar = self.realAvatarNode {
+            avatar.layer.opacity = 1.0
+        }
+    }
+    
+    func update(transition: ContainedViewLayoutTransition) -> Bool {
+        let offs = -offset
+        var h = offs - storiesInset
+        let y0 = navigationHeight + storiesInset + UIScreenPixel
+        var y = y0 //min(52.0 - offset, 52.0 + 83.0)
+        
+        if (storiesInset > 0.0) { // see also updateNavigationScrolling below
+            if (offs > storiesInset) {
+                y += (offs - storiesInset) * 0.1
+                h *= 0.9
+            }
+        }
+        
+        h = max(0.0, h - UIScreenPixel)
+        if isTriggered {
+            h = max(80.0, h + 56.0)
+        }
+        let th = max(0.0, h - 15.0)
+        isHidden = h == 0.0
+        if isHidden && !isTriggered {
+            reset()
+            return false
+        }
+        
+        if !isTriggered && !isDragging {
+            animationNode.animationView()?.currentFrame = 0
+        }
+        
+        let textFrame = CGRect(x: 0.0, y: h - 27.0, width: width, height: 27.0)
+        let _ = swipeTextNode.updateLayout(textFrame.size)
+        let _ = releaseTextNode.updateLayout(textFrame.size)
+        
+        if !isTriggered {
+            let bounds = CGRect(x: 0.0, y: 0.0, width: width, height: h)
+            transition.updateFrame(node: self, frame: CGRect(x: 0.0, y: y, width: width, height: h))
+            
+            //transition.updateFrame(node: foregroundNode, frame: bounds)
+            foregroundNode.frame = bounds
+            backgroundNode.frame = bounds
+            
+            transition.updateFrame(node: trackNode, frame: CGRect(x: 30.0, y: 7.5, width: 20.0, height: th))
+            transition.updateFrame(node: animationNode, frame: CGRect(x: 11.5, y: h - 48.0, width: 57.0, height: 57.0))
+            transition.updateFrame(node: swipeTextNode, frame: textFrame)
+            transition.updateFrame(node: releaseTextNode, frame: CGRect(x: -40.0, y: 0.0, width: width, height: 27.0))
+            transition.updateFrame(node: releaseWrapperNode, frame: CGRect(x: 40.0, y: h - 27.0, width: width - 40.0, height: 27.0))
+            //maskLayer.position = CGPoint(x: 40.0, y: h - 17.5)
+            maskLayer.transform = CATransform3DMakeTranslation(40.0, max(h, activationThreshold) - 17.5, 0.0)
+        }
+        
+        let isNowActive = h > activationThreshold
+        let isNowTriggered = !isTriggered && (prevH > activationThreshold && !isDragging)
+        if isNowTriggered {
+            isTriggered = true
+            isWaitingForAnimation = true
+            let transition: ContainedViewLayoutTransition = .animated(duration: 0.7, curve: .slide)
+            let transition2: ContainedViewLayoutTransition = .animated(duration: 0.4, curve: .linear)
+            
+            /*let bounds = CGRect(x: 0.0, y: 0.0, width: width, height: 76.0)
+            transition.updateFrame(node: self, frame: CGRect(x: 0.0, y: y0, width: width, height: 76.0))
+            transition.updateFrame(node: foregroundNode, frame: bounds)*/
+            
+            transition.updateTransformRotation(node: animationNode, angle: 0.0)
+            
+            animationNode.animationView()?.play() { [weak self] _ in
+                self?.isHidden = true
+                self?.isActive = false
+                self?.isTriggered = false
+                self?.isWaitingForAnimation = false
+                self?.reset()
+            }
+            
+            transition2.updateFrame(node: trackNode, frame: CGRect(x: 30.0, y: 34.0, width: 20.0, height: 0.0))
+            transition2.updateFrame(node: animationNode, frame: CGRect(x: 10.0, y: 10.0, width: 60.0, height: 60.0))
+            
+            let textFrame = CGRect(x: 0.0, y: 76.0 - 27.0, width: width, height: 27.0)
+            transition.updateFrame(node: swipeTextNode, frame: textFrame)
+            transition.updateFrame(node: releaseTextNode, frame: CGRect(x: -40.0, y: 0.0, width: width, height: 27.0))
+            transition.updateFrame(node: releaseWrapperNode, frame: CGRect(x: 40.0, y: 76.0 - 27.0, width: width - 40.0, height: 27.0))
+            
+            
+            //maskLayer.position = CGPoint(x: 40.0, y: 38.0)
+            maskLayer.transform = CATransform3DMakeTranslation(40.0, 38.0, 0.0)
+            if let avatar = self.realAvatarNode {
+                avatar.layer.opacity = 0.0
+            }
+        }
+        
+        if isTriggered {
+            if let avatar = self.realAvatarNode {
+                avatar.layer.opacity = 0.0
+            }
+            if h < activationThreshold + 10.0 {
+                let transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .slide)
+                
+                transition.updateFrame(node: self, frame: CGRect(x: 0.0, y: y0, width: width, height: 86.0))
+                transition.updateFrame(node: foregroundNode, frame: CGRect(x: 0.0, y: 0.0, width: width, height: 86.0))
+                
+                let sc = 29.0 / width
+                transition.updateSublayerTransformScale(layer: maskLayer, scale: CGPoint(x: sc, y: sc)) { [weak self] _ in
+                    if let avatar = self?.realAvatarNode {
+                        avatar.layer.opacity = 1.0
+                    }
+                }
+                transition.updateTransformScale(node: avatarNode, scale: CGPoint(x: sc, y: sc))
+                transition.updateAlpha(node: avatarNode, alpha: 1.0)
+                animationNode.setColors(colors: [ // TODO: they should be animated
+                    "Arrow 1.Arrow 1.Stroke 1": avColor,
+                    "Arrow 2.Arrow 2.Stroke 1": avColor,
+                    "Box.box1.Fill 1": whiteColor,
+                    "Cap.cap1.Fill 1": whiteColor,
+                    "Cap.cap2.Fill 1": whiteColor,
+                ])
+            } else {
+                let bounds = CGRect(x: 0.0, y: 0.0, width: width, height: h)
+                transition.updateFrame(node: self, frame: CGRect(x: 0.0, y: y, width: width, height: h + 10.0))
+                //transition.updateFrame(node: foregroundNode, frame: bounds)
+                foregroundNode.frame = bounds
+                backgroundNode.frame = bounds
+            }
+        }
+        
+        if !isTriggered && isNowActive != isActive {
+            isActive = isNowActive
+            
+            let transition: ContainedViewLayoutTransition = .animated(duration: 0.5, curve: .easeInOut)
+            
+            transition.updateTransformRotation(node: animationNode, angle: isNowActive ? 0.0 : CGFloat(Float.pi))
+            
+            transition.updateTransform(node: swipeTextNode, transform: CGAffineTransformMakeTranslation(isNowActive ? width * 0.6 : 0.0, 0.0))
+            transition.updateAlpha(node: swipeTextNode, alpha: isNowActive ? 0.0 : 1.0)
+            
+            transition.updateTransform(node: releaseTextNode, transform: CGAffineTransformMakeTranslation(isNowActive ? 0.0 : -width * 0.6, 0.0))
+            transition.updateAlpha(node: releaseTextNode, alpha: isNowActive ? 1.0 : 0.0)
+            
+            let sc = isNowActive ? 1.0 : 0.0
+            transition.updateSublayerTransformScale(layer: maskLayer, scale: CGPoint(x: sc, y: sc))
+            animationNode.setColors(colors: [ // TODO: they should be animated
+                "Arrow 1.Arrow 1.Stroke 1": isNowActive ? fgColor : bgColor,
+                "Arrow 2.Arrow 2.Stroke 1": isNowActive ? fgColor : bgColor,
+                "Box.box1.Fill 1": whiteColor,
+                "Cap.cap1.Fill 1": whiteColor,
+                "Cap.cap2.Fill 1": whiteColor,
+            ])
+        }
+        
+        backgroundNode.isHidden = isTriggered
+        swipeTextNode.isHidden = isTriggered
+        prevH = h
+        return isNowTriggered
+    }
+    
+    func updateLayout(size: CGSize, insets: UIEdgeInsets, transition: ContainedViewLayoutTransition) {
+        self.width = size.width // todo: use validLayout like everything else
+        
+        let msz = width
+        avatarNode.frame = CGRect(x: -msz + 40.0, y: -msz + 38.0, width: msz * 2, height: msz * 2)
+        maskSublayer.frame = CGRect(x: -msz, y: -msz, width: msz * 2, height: msz * 2)
+        maskSublayer.cornerRadius = msz
+        let result = update(transition: transition)
+        if result {
+            print("updateLayout set isNowTriggered")
+        }
+    }
+    
+    func updateScrollingOffset(navigationHeight: CGFloat, storiesInset: CGFloat, offset: CGFloat, isDragging: Bool, transition: ContainedViewLayoutTransition, listNode: ASDisplayNode, hasHiddenItems: Bool) -> Bool {
+        self.navigationHeight = navigationHeight
+        self.storiesInset = storiesInset
+        self.offset = hasHiddenItems ? offset : 0.0
+        self.isDragging = isDragging
+        self.hasHiddenItems = hasHiddenItems
+        if isWaitingForAnimation && isDragging {
+            self.isHidden = true
+            self.isActive = false
+            self.isTriggered = false
+            self.isWaitingForAnimation = false
+            self.reset()
+        }
+        if let subnodes1 = listNode.subnodes, subnodes1.count > 2, let subnodes2 = subnodes1[2].subnodes, subnodes2.count > 2, let subnodes3 = subnodes2[2].subnodes, subnodes3.count > 1 {
+            self.realAvatarNode = subnodes3[1]
+        }
+        return update(transition: .immediate)
     }
 }
 
@@ -351,6 +647,8 @@ private final class ChatListContainerItemNode: ASDisplayNode {
     private var shimmerNodeOffset: CGFloat = 0.0
     let listNode: ChatListNode
     
+    var pullToArchiveNode: ChatListPullToArchiveNode!
+    
     private var topPanel: TopPanelItem?
     
     private var pollFilterUpdatesDisposable: Disposable?
@@ -379,6 +677,8 @@ private final class ChatListContainerItemNode: ASDisplayNode {
         
         self.listNode = ChatListNode(context: context, location: location, chatListFilter: filter, previewing: previewing, fillPreloadItems: controlsHistoryPreload, mode: chatListMode, theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, nameSortOrder: presentationData.nameSortOrder, nameDisplayOrder: presentationData.nameDisplayOrder, animationCache: animationCache, animationRenderer: animationRenderer, disableAnimations: true, isInlineMode: isInlineMode, autoSetReady: autoSetReady)
         
+        self.pullToArchiveNode = ChatListPullToArchiveNode(theme: presentationData.theme)
+        
         if let controller, case .chatList(groupId: .root) = controller.location {
             self.listNode.scrollHeightTopInset = ChatListNavigationBar.searchScrollHeight + ChatListNavigationBar.storiesScrollHeight
         }
@@ -386,6 +686,8 @@ private final class ChatListContainerItemNode: ASDisplayNode {
         super.init()
         
         self.addSubnode(self.listNode)
+        self.listNode.addSubnode(self.pullToArchiveNode)
+        
         
         self.listNode.isEmptyUpdated = { [weak self] isEmptyState, _, transition in
             guard let strongSelf = self else {
@@ -740,6 +1042,12 @@ private final class ChatListContainerItemNode: ASDisplayNode {
         transition.updateFrame(node: self.listNode, frame: CGRect(origin: CGPoint(), size: size))
         self.listNode.updateLayout(transition: transition, updateSizeAndInsets: updateSizeAndInsets, visibleTopInset: visualNavigationHeight + additionalTopInset, originalTopInset: originalNavigationHeight + additionalTopInset, storiesInset: storiesInset, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction)
         
+        
+        /*if let scrollingOffset = self.scrollingOffset {
+            self.pullToArchiveNode.update(y: scrollingOffset.offset, size: CGSize(width: size.width, height: 160.0), isReleased: false, transition: transition)
+        }*/
+        self.pullToArchiveNode.updateLayout(size: size, insets: insets, transition: transition)
+        
         if let emptyNode = self.emptyNode {
             let emptyNodeFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: size.width, height: size.height))
             transition.updateFrame(node: emptyNode, frame: emptyNodeFrame)
@@ -753,12 +1061,24 @@ private final class ChatListContainerItemNode: ASDisplayNode {
         self.layoutAdditionalPanels(transition: transition)
     }
     
-    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) {
+    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) -> Bool {
         self.scrollingOffset = (navigationHeight, offset)
+        
+        var storiesInset: CGFloat = 0.0
+        if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+            storiesInset = ChatListNavigationBar.storiesScrollHeight
+        }
+        
+        let hasHiddenItems = self.pullToArchiveNode.isTriggered || listNode.hasItemsToBeRevealed()
+        let isNowTriggered = self.pullToArchiveNode.updateScrollingOffset(navigationHeight: navigationHeight, storiesInset: storiesInset, offset: offset, isDragging: listNode.isDragging, transition: transition, listNode: listNode, hasHiddenItems: hasHiddenItems)
+        if hasHiddenItems && isNowTriggered {
+            listNode.revealScrollHiddenItem()
+        }
         
         if let emptyNode = self.emptyNode {
             emptyNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: offset, transition: transition)
         }
+        return hasHiddenItems
     }
 }
 
@@ -1579,7 +1899,7 @@ public final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDele
                                                 
                         itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                         if let scrollingOffset = strongSelf.scrollingOffset {
-                            itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
+                            let _ = itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
                         }
                         
                         strongSelf.selectedId = id
@@ -1600,7 +1920,7 @@ public final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDele
                     itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                     
                     if let scrollingOffset = self.scrollingOffset {
-                        itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
+                        let _ = itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
                     }
                     return
                 }
@@ -1608,11 +1928,13 @@ public final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDele
         }
     }
     
-    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) {
+    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) -> Bool {
+        var hasHiddenItems = false
         self.scrollingOffset = (navigationHeight, offset)
         for (_, itemNode) in self.itemNodes {
-            itemNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: offset, transition: transition)
+            hasHiddenItems = hasHiddenItems || itemNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: offset, transition: transition)
         }
+        return hasHiddenItems
     }
     
     public func update(layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, originalNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, insets: UIEdgeInsets, isReorderingFilters: Bool, isEditing: Bool, inlineNavigationLocation: ChatListControllerLocation?, inlineNavigationTransitionFraction: CGFloat, storiesInset: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -1689,7 +2011,7 @@ public final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDele
                 
                 itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: itemInlineNavigationTransitionFraction, storiesInset: storiesInset, transition: nodeTransition)
                 if let scrollingOffset = self.scrollingOffset {
-                    itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: nodeTransition)
+                    let _ = itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: nodeTransition)
                 }
                 
                 if wasAdded, case .animated = transition {
@@ -2106,7 +2428,20 @@ final class ChatListControllerNode: ASDisplayNode, UIGestureRecognizerDelegate {
             mainOffset = navigationHeight
         }
         
-        self.mainContainerNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: mainOffset, transition: transition)
+        
+        if self.mainContainerNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: mainOffset, transition: transition) {
+            var storiesInset: CGFloat = 0.0
+            if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                storiesInset = ChatListNavigationBar.storiesScrollHeight
+            }
+            if (storiesInset > 0.0) {
+                if (-mainOffset > storiesInset) {
+                    mainOffset = -storiesInset + (storiesInset + mainOffset) * 0.1
+                }
+            } else {
+                mainOffset = max(mainOffset, 0.0)
+            }
+        }
         
         mainOffset = min(mainOffset, ChatListNavigationBar.searchScrollHeight)
         if abs(mainOffset) < 0.1 {
@@ -2423,8 +2758,10 @@ final class ChatListControllerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         guard let containerLayout = self.containerLayout else {
             return
         }
+        print("ChatListControllerNode.contentOffsetChanged(offset = \(offset)); navigationBarHeight = \(containerLayout.cleanNavigationBarHeight)")
+        print("listNode.frame = \(mainContainerNode.currentItemNode.frame)")
         self.updateNavigationScrolling(navigationHeight: containerLayout.navigationBarHeight, transition: self.tempNavigationScrollingTransition ?? .immediate)
-        
+    
         if listView.isDragging {
             var overscrollSelectedId: EnginePeer.Id?
             var overscrollHiddenChatItemsAllowed = false
@@ -2488,7 +2825,7 @@ final class ChatListControllerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                                 self.allowOverscrollItemExpansion = false
                                 
                                 if isPrimary {
-                                    self.mainContainerNode.currentItemNode.revealScrollHiddenItem()
+                                    //self.mainContainerNode.currentItemNode.revealScrollHiddenItem()
                                 } else {
                                     self.inlineStackContainerNode?.currentItemNode.revealScrollHiddenItem()
                                 }

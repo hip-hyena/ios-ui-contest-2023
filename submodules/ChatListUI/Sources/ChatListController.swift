@@ -66,13 +66,19 @@ private final class ContextControllerContentSourceImpl: ContextControllerContent
     
     func transitionInfo() -> ContextControllerTakeControllerInfo? {
         let sourceNode = self.sourceNode
-        return ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceNode] in
+        let info = ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceNode] in
             if let sourceNode = sourceNode {
                 return (sourceNode.view, sourceNode.bounds)
             } else {
                 return nil
             }
         })
+        if let sourceNode = sourceNode as? ContextControllerSourceNode {
+            info.mainNode = sourceNode.mainNode
+            info.avatarNode = sourceNode.avatarNode
+            info.onlineNode = sourceNode.onlineNode
+        }
+        return info
     }
     
     func animatedIn() {

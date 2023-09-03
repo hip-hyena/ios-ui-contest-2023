@@ -25,6 +25,7 @@ swift_library(
         "//submodules/TelegramUI/Components/EntityKeyboard:EntityKeyboard",
         "//submodules/UndoUI:UndoUI",
         "//submodules/AnimationUI:AnimationUI",
+        "//submodules/WallpaperBackgroundNode:WallpaperBackgroundNode",
     ],
     visibility = [
         "//visibility:public",

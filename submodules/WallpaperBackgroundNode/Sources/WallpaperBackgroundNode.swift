@@ -85,6 +85,7 @@ public protocol WallpaperBackgroundNode: ASDisplayNode {
     func update(wallpaper: TelegramWallpaper)
     func _internalUpdateIsSettingUpWallpaper()
     func updateLayout(size: CGSize, displayMode: WallpaperDisplayMode, transition: ContainedViewLayoutTransition)
+    func updateLayout(size: CGSize)
     func updateIsLooping(_ isLooping: Bool)
     func animateEvent(transition: ContainedViewLayoutTransition, extendAnimation: Bool)
     func updateBubbleTheme(bubbleTheme: PresentationTheme, bubbleCorners: PresentationChatBubbleCorners)
@@ -1293,6 +1294,12 @@ final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgroundNode 
         }
 
         transition.updateFrame(layer: self.patternImageLayer, frame: CGRect(origin: CGPoint(), size: size))
+    }
+    
+    func updateLayout(size: CGSize) {
+        if let layout = self.validLayout {
+            self.updateLayout(size: size, displayMode: layout.1, transition: .immediate)
+        }
     }
     
     func updateLayout(size: CGSize, displayMode: WallpaperDisplayMode, transition: ContainedViewLayoutTransition) {

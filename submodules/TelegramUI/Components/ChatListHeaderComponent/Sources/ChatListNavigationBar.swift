@@ -222,6 +222,8 @@ public final class ChatListNavigationBar: Component {
         public func applyScroll(offset: CGFloat, allowAvatarsExpansion: Bool, forceUpdate: Bool = false, transition: Transition) {
             let transition = transition
             
+            print("ChatListNavigationBar.applyScroll(offset = \(offset))")
+            
             self.rawScrollOffset = offset
             let allowAvatarsExpansionUpdated = self.currentAllowAvatarsExpansion != allowAvatarsExpansion
             self.currentAllowAvatarsExpansion = allowAvatarsExpansion
@@ -245,6 +247,7 @@ public final class ChatListNavigationBar: Component {
             let minContentOffset: CGFloat = ChatListNavigationBar.searchScrollHeight
             
             let clippedScrollOffset = min(minContentOffset, offset)
+            print("searchOffsetDistance = \(searchOffsetDistance), minContentOffset = \(minContentOffset), clippedScrollOffset = \(clippedScrollOffset)")
             if self.clippedScrollOffset == clippedScrollOffset && !self.hasDeferredScrollOffset && !forceUpdate && !allowAvatarsExpansionUpdated {
                 return
             }
@@ -254,6 +257,8 @@ public final class ChatListNavigationBar: Component {
             let visibleSize = CGSize(width: currentLayout.size.width, height: max(0.0, currentLayout.size.height - clippedScrollOffset))
             
             let previousHeight = self.separatorLayer.position.y
+            
+            print("visibleSize = \(visibleSize), previousHeight = \(previousHeight)")
             
             self.backgroundView.update(size: CGSize(width: visibleSize.width, height: 1000.0), transition: transition.containedViewLayoutTransition)
             
@@ -333,6 +338,8 @@ public final class ChatListNavigationBar: Component {
                 storiesOffsetFraction = 0.0
                 storiesUnlocked = false
             }
+            
+            print("searchFrame = \(searchFrame), clippedSearchOffset = \(clippedSearchOffset), searchOffsetFraction = \(searchOffsetFraction), storiesOffsetFraction = \(storiesOffsetFraction), storiesUnlocked = \(storiesUnlocked)")
             
             if allowAvatarsExpansion, transition.animation.isImmediate, let storySubscriptions = component.storySubscriptions, !storySubscriptions.items.isEmpty {
                 if self.storiesUnlocked != storiesUnlocked {

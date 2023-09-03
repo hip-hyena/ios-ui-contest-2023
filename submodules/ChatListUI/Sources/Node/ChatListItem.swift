@@ -1257,6 +1257,10 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
         self.contextContainer.addSubnode(self.avatarContainerNode)
         self.contextContainer.addSubnode(self.onlineNode)
         
+        self.contextContainer.mainNode = self.mainContentContainerNode
+        self.contextContainer.avatarNode = self.avatarContainerNode
+        self.contextContainer.onlineNode = self.onlineNode
+        
         self.mainContentContainerNode.addSubnode(self.titleNode)
         self.mainContentContainerNode.addSubnode(self.authorNode)
         self.mainContentContainerNode.addSubnode(self.textNode.textNode)
